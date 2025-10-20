@@ -383,4 +383,11 @@ if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set_xcode_property(spm_train PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
     set_xcode_property(spm_export_vocab PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
   endif()
+  # Some Xcode configurations may still report a missing PRODUCT_BUNDLE_IDENTIFIER
+  # for command-line tool targets. As a fallback ensure the Xcode build setting
+  # is present by applying the Xcode build attribute via target properties.
+  if (CMAKE_GENERATOR MATCHES "Xcode")
+    set_target_properties(spm_encode spm_decode spm_normalize spm_train spm_export_vocab PROPERTIES
+      XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.sentencepiece.sentencepiece")
+  endif()
 endif()
