@@ -373,9 +373,14 @@ if (SPM_BUILD_TEST)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
-  set_xcode_property(spm_encode PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
-  set_xcode_property(spm_decode PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
-  set_xcode_property(spm_normalize PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
-  set_xcode_property(spm_train PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
-  set_xcode_property(spm_export_vocab PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+  # set_xcode_property is only available when using the Xcode generator.
+  # Guard the calls so configuring on macOS/iOS with non-Xcode generators
+  # (e.g. Ninja/Unix Makefiles) does not fail with "Unknown CMake command".
+  if (COMMAND set_xcode_property)
+    set_xcode_property(spm_encode PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+    set_xcode_property(spm_decode PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+    set_xcode_property(spm_normalize PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+    set_xcode_property(spm_train PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+    set_xcode_property(spm_export_vocab PRODUCT_BUNDLE_IDENTIFIER "SentencePiece" All)
+  endif()
 endif()
