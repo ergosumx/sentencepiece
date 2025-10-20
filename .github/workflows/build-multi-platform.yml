@@ -1,0 +1,590 @@
+name: Build Multi-Platform SentencePiece
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v1.0.0)"
+        required: true
+        default: "v1.0.0"
+      create_release:
+        description: "Create GitHub Release"
+        required: false
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  CMAKE_BUILD_TYPE: Release
+  BUILD_SHARED_LIBS: ON
+
+jobs:
+  # ============================================
+  # Linux x64
+  # ============================================
+  build-linux-x64:
+    name: Build Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DSPM_ENABLE_SHARED=ON
+          make -j$(nproc)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/linux-x64/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/linux-x64/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.so*" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c not found in build output" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          # Include canonical SentencePiece library for reference
+          find build -type f -name "libsentencepiece.so*" -exec cp {} artifacts/linux-x64/native/ \; || true
+          ls -lh artifacts/linux-x64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-linux-x64
+          path: artifacts/linux-x64/
+
+  # ============================================
+  # Linux ARM64
+  # ============================================
+  build-linux-arm64:
+    name: Build Linux ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies and cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPM_ENABLE_SHARED=ON \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          make -j$(nproc)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/linux-arm64/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/linux-arm64/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.so*" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c not found in build output" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          find build -type f -name "libsentencepiece.so*" -exec cp {} artifacts/linux-arm64/native/ \; || true
+          ls -lh artifacts/linux-arm64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-linux-arm64
+          path: artifacts/linux-arm64/
+
+  # ============================================
+  # Windows x64
+  # ============================================
+  build-windows-x64:
+    name: Build Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build SentencePiece
+        shell: pwsh
+        run: |
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          cmake --build . --config Release --parallel
+
+      - name: Prepare artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/win-x64/native
+          # Ensure the C facade is available
+          $cFacade = @(Get-ChildItem -Path build -Recurse -Filter "sentencepiece_c*.dll" -ErrorAction SilentlyContinue)
+          if ($cFacade.Count -eq 0) {
+            Write-Host "❌ Error: sentencepiece_c DLL not found!"
+            Get-ChildItem -Path build -Recurse -Filter "*.dll" | ForEach-Object {
+              Write-Host "Available DLL: $($_.FullName)"
+            }
+            exit 1
+          }
+
+          $cFacade | ForEach-Object {
+            Copy-Item $_.FullName artifacts/win-x64/native/
+            Write-Host "✅ Copied facade: $($_.Name)"
+          }
+
+          # Ship the canonical SentencePiece DLL as well when available
+          $coreDlls = @(Get-ChildItem -Path build -Recurse -Filter "sentencepiece.dll" -ErrorAction SilentlyContinue)
+          $coreDlls | ForEach-Object {
+            Copy-Item $_.FullName artifacts/win-x64/native/ -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem artifacts/win-x64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-win-x64
+          path: artifacts/win-x64/
+
+  # ============================================
+  # Windows ARM64
+  # ============================================
+  build-windows-arm64:
+    name: Build Windows ARM64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build SentencePiece
+        shell: pwsh
+        run: |
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A ARM64 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          cmake --build . --config Release --parallel
+
+      - name: Prepare artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/win-arm64/native
+          $cFacade = @(Get-ChildItem -Path build -Recurse -Filter "sentencepiece_c*.dll" -ErrorAction SilentlyContinue)
+          if ($cFacade.Count -eq 0) {
+            Write-Host "⚠️ Warning: sentencepiece_c DLL not found (ARM64 may not be available on runner)"
+            Get-ChildItem -Path build -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Available DLL: $($_.FullName)"
+            }
+          } else {
+            $cFacade | ForEach-Object {
+              Copy-Item $_.FullName artifacts/win-arm64/native/
+              Write-Host "✅ Copied facade: $($_.Name)"
+            }
+          }
+
+          $coreDlls = @(Get-ChildItem -Path build -Recurse -Filter "sentencepiece.dll" -ErrorAction SilentlyContinue)
+          $coreDlls | ForEach-Object {
+            Copy-Item $_.FullName artifacts/win-arm64/native/ -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem artifacts/win-arm64/native/ -ErrorAction SilentlyContinue
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-win-arm64
+          path: artifacts/win-arm64/
+        continue-on-error: true
+
+  # ============================================
+  # macOS x64
+  # ============================================
+  build-macos-x64:
+    name: Build macOS x64
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPM_ENABLE_SHARED=ON \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/osx-x64/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/osx-x64/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.dylib" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c.dylib not found" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          find build -type f -name "libsentencepiece.dylib" -exec cp {} artifacts/osx-x64/native/ \; || true
+          ls -lh artifacts/osx-x64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-osx-x64
+          path: artifacts/osx-x64/
+
+  # ============================================
+  # macOS ARM64 (Apple Silicon)
+  # ============================================
+  build-macos-arm64:
+    name: Build macOS ARM64
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPM_ENABLE_SHARED=ON \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/osx-arm64/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/osx-arm64/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.dylib" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c.dylib not found" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          find build -type f -name "libsentencepiece.dylib" -exec cp {} artifacts/osx-arm64/native/ \; || true
+          ls -lh artifacts/osx-arm64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-osx-arm64
+          path: artifacts/osx-arm64/
+
+  # ============================================
+  # Android ARM64
+  # ============================================
+  build-android-arm64:
+    name: Build Android ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip cmake
+          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPM_ENABLE_SHARED=ON \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_SYSTEM_VERSION=21 \
+            -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
+            -DCMAKE_ANDROID_NDK=$ANDROID_NDK_HOME \
+            -DCMAKE_ANDROID_STL_TYPE=c++_shared
+          make -j$(nproc)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/android-arm64/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/android-arm64/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.so" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c.so not found" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          find build -type f -name "libsentencepiece.so" -exec cp {} artifacts/android-arm64/native/ \; || true
+          ls -lh artifacts/android-arm64/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-android-arm64
+          path: artifacts/android-arm64/
+
+  # ============================================
+  # Android ARM32
+  # ============================================
+  build-android-arm32:
+    name: Build Android ARM32
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip cmake
+          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26d" >> $GITHUB_ENV
+
+      - name: Build SentencePiece
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPM_ENABLE_SHARED=ON \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_SYSTEM_VERSION=21 \
+            -DCMAKE_ANDROID_ARCH_ABI=armeabi-v7a \
+            -DCMAKE_ANDROID_NDK=$ANDROID_NDK_HOME \
+            -DCMAKE_ANDROID_STL_TYPE=c++_shared
+          make -j$(nproc)
+
+      - name: Prepare artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/android-arm32/native
+          copied=false
+          while IFS= read -r file; do
+            cp "$file" artifacts/android-arm32/native/
+            copied=true
+          done < <(find build -type f -name "libsentencepiece_c*.so" -print)
+
+          if [ "$copied" = false ]; then
+            echo "❌ libsentencepiece_c.so not found" >&2
+            find build -type f -name "*sentencepiece*"
+            exit 1
+          fi
+
+          find build -type f -name "libsentencepiece.so" -exec cp {} artifacts/android-arm32/native/ \; || true
+          ls -lh artifacts/android-arm32/native/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentencepiece-android-arm32
+          path: artifacts/android-arm32/
+
+  # ============================================
+  # Create Release
+  # ============================================
+  create-release:
+    name: Create GitHub Release
+    needs:
+      - build-linux-x64
+      - build-linux-arm64
+      - build-windows-x64
+      - build-windows-arm64
+      - build-macos-x64
+      - build-macos-arm64
+      - build-android-arm64
+      - build-android-arm32
+    runs-on: ubuntu-latest
+    if: github.event.inputs.create_release == 'true' || startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create distribution packages
+        run: |
+          cd release-artifacts
+
+          # List downloaded artifacts
+          echo "Downloaded artifacts:"
+          ls -la
+
+          # Create a combined package first (before zipping)
+          mkdir -p all-platforms
+          for dir in sentencepiece-*/; do
+            if [ -d "$dir" ]; then
+              echo "Copying from directory: $dir"
+              cp -r "$dir"/* all-platforms/ 2>/dev/null || echo "Warning: No files in $dir"
+            fi
+          done
+
+          # Create zip files for each platform directory
+          for dir in sentencepiece-*/; do
+            if [ -d "$dir" ]; then
+              dir_name="${dir%/}"  # Remove trailing slash
+              platform_name=$(echo "$dir_name" | sed 's/sentencepiece-//')
+              echo "Creating zip for: $dir_name -> sentencepiece-${platform_name}.zip"
+              zip -r "sentencepiece-${platform_name}.zip" "$dir_name"
+            fi
+          done
+
+          # Create all-platforms zip
+          echo "Creating all-platforms zip"
+          zip -r "sentencepiece-all-platforms.zip" all-platforms
+
+          echo "Generated zip files:"
+          ls -lh *.zip
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          cat > RELEASE_NOTES.md << 'EOF'
+          # SentencePiece - Multi-Platform Native Libraries
+
+          ## Version ${{ steps.get_version.outputs.version }}
+
+          Pre-built native libraries for Google SentencePiece across multiple platforms.
+
+          ### 📦 Supported Platforms
+
+          | Platform | RID | Architecture | Status |
+          |----------|-----|--------------|--------|
+          | Linux | `linux-x64` | x86_64 | ✅ Tested |
+          | Linux | `linux-arm64` | ARM64 | ✅ Built |
+          | Windows | `win-x64` | x86_64 | ✅ Tested |
+          | Windows | `win-arm64` | ARM64 | ⚠️ Experimental |
+          | macOS | `osx-x64` | x86_64 | ✅ Tested |
+          | macOS | `osx-arm64` | ARM64 (M1/M2/M3) | ✅ Tested |
+          | Android | `android-arm64` | ARM64 | ✅ Built |
+          | Android | `android-arm32` | ARM32 | ✅ Built |
+
+          ### 📥 Download
+
+          - **Individual platforms**: Download `sentencepiece-{platform}.zip`
+          - **All platforms**: Download `sentencepiece-all-platforms.zip`
+
+          ### 🚀 Usage
+
+          1. Download the appropriate platform package
+          2. Extract to your project's `native/runtimes/{rid}/native/` directory
+          3. The .NET wrapper will automatically detect and load the correct library
+
+          ### 🔧 Integration
+
+          ```xml
+          <!-- In your .csproj -->
+          <ItemGroup>
+            <Content Include="native\runtimes\**\*" PackagePath="runtimes" />
+          </ItemGroup>
+          ```
+
+          ### 📝 Notes
+
+          - All libraries built from Google SentencePiece repository
+          - CMake build system with shared library support
+          - Build date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ### ✨ Features
+
+          - ✅ Unigram language model
+          - ✅ BPE (Byte-Pair Encoding)
+          - ✅ Character-level and Word-level tokenization
+          - ✅ Subword regularization
+          - ✅ Vocabulary size customization
+          - ✅ Training and inference support
+
+          ---
+
+          **Built with ❤️ using GitHub Actions**
+          EOF
+
+          cat RELEASE_NOTES.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: SentencePiece ${{ steps.get_version.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## 🎉 Release Created Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** 8 (Linux x64/ARM64, Windows x64/ARM64, macOS x64/ARM64, Android ARM64/ARM32)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+          cd release-artifacts
+          ls -lh *.zip | awk '{print "- " $9 " (" $5 ")"}' >> $GITHUB_STEP_SUMMARY
