@@ -213,14 +213,27 @@ if ((${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm") OR
   endif()
 endif()
 
+set(SPM_C_SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/../bindings/c/sentencepiece_c.cc)
+
 
 if (SPM_ENABLE_SHARED)
   add_library(sentencepiece SHARED ${SPM_SRCS})
   add_library(sentencepiece_train SHARED ${SPM_TRAIN_SRCS})
+  add_library(sentencepiece_c SHARED ${SPM_C_SRCS})
   if (ANDROID)
-    target_link_libraries(sentencepiece log)
-    target_link_libraries(sentencepiece_train log)
+    target_link_libraries(sentencepiece PRIVATE log)
+    target_link_libraries(sentencepiece_train PRIVATE log)
+    target_link_libraries(sentencepiece_c PRIVATE log)
   endif()
+  target_compile_definitions(sentencepiece_c PRIVATE SPC_EXPORTS)
+  target_link_libraries(sentencepiece_c PRIVATE sentencepiece sentencepiece_train)
+  target_include_directories(sentencepiece_c
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../bindings/c>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 endif()
 
 add_library(sentencepiece-static STATIC ${SPM_SRCS})
@@ -229,28 +242,66 @@ add_library(sentencepiece_train-static STATIC ${SPM_TRAIN_SRCS})
 target_link_libraries(sentencepiece-static INTERFACE ${SPM_LIBS})
 target_link_libraries(sentencepiece_train-static INTERFACE sentencepiece-static ${SPM_LIBS})
 
+add_library(sentencepiece_c-static STATIC ${SPM_C_SRCS})
+target_link_libraries(sentencepiece_c-static PUBLIC sentencepiece-static sentencepiece_train-static)
+target_compile_definitions(sentencepiece_c-static PUBLIC SPC_STATIC)
+target_include_directories(sentencepiece_c-static
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../bindings/c>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+set_target_properties(sentencepiece_c-static PROPERTIES OUTPUT_NAME "sentencepiece_c")
+
 if (SPM_ENABLE_SHARED)
-  target_link_libraries(sentencepiece ${SPM_LIBS})
-  target_link_libraries(sentencepiece_train ${SPM_LIBS} sentencepiece)
-  set(SPM_INSTALLTARGETS sentencepiece sentencepiece_train sentencepiece-static sentencepiece_train-static)
+  target_link_libraries(sentencepiece PRIVATE ${SPM_LIBS})
+  target_link_libraries(sentencepiece_train PRIVATE sentencepiece ${SPM_LIBS})
+  set(SPM_INSTALLTARGETS
+    sentencepiece
+    sentencepiece_train
+    sentencepiece_c
+    sentencepiece-static
+    sentencepiece_train-static
+    sentencepiece_c-static)
   set_target_properties(sentencepiece sentencepiece_train PROPERTIES SOVERSION 0 VERSION 0.0.0)
   set_target_properties(sentencepiece PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS YES)
   set_target_properties(sentencepiece_train PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS YES)
+  set_target_properties(sentencepiece_c PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS YES)
   if (MSVC)
     set_target_properties(sentencepiece PROPERTIES IMPORT_SUFFIX "_import.lib")
     set_target_properties(sentencepiece_train PROPERTIES IMPORT_SUFFIX "_import.lib")
+    set_target_properties(sentencepiece_c PROPERTIES IMPORT_SUFFIX "_import.lib")
   elseif (MINGW)
     set_target_properties(sentencepiece PROPERTIES IMPORT_SUFFIX ".dll.a")
     set_target_properties(sentencepiece_train PROPERTIES IMPORT_SUFFIX ".dll.a")
+    set_target_properties(sentencepiece_c PROPERTIES IMPORT_SUFFIX ".dll.a")
   endif()
 else()
   add_library(sentencepiece ALIAS sentencepiece-static)
   add_library(sentencepiece_train ALIAS sentencepiece_train-static)
-  set(SPM_INSTALLTARGETS sentencepiece-static sentencepiece_train-static)
+  set(SPM_INSTALLTARGETS sentencepiece-static sentencepiece_train-static sentencepiece_c-static)
+  if (WIN32)
+    add_library(sentencepiece_c SHARED ${SPM_C_SRCS})
+    target_compile_definitions(sentencepiece_c PRIVATE SPC_EXPORTS)
+    target_link_libraries(sentencepiece_c PRIVATE sentencepiece-static sentencepiece_train-static)
+    target_include_directories(sentencepiece_c
+      PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../bindings/c>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    set_target_properties(sentencepiece_c PROPERTIES
+      OUTPUT_NAME "sentencepiece_c"
+      WINDOWS_EXPORT_ALL_SYMBOLS YES)
+    list(APPEND SPM_INSTALLTARGETS sentencepiece_c)
+  endif()
 endif()
 
 set_target_properties(sentencepiece-static PROPERTIES OUTPUT_NAME "sentencepiece")
 set_target_properties(sentencepiece_train-static PROPERTIES OUTPUT_NAME "sentencepiece_train")
+if (SPM_ENABLE_SHARED)
+  set_target_properties(sentencepiece_c PROPERTIES OUTPUT_NAME "sentencepiece_c")
+endif()
 
 if (NOT MSVC)
   set(CMAKE_CXX_FLAGS "-O3 -Wall -fPIC ${CMAKE_CXX_FLAGS}")
@@ -271,15 +322,15 @@ add_executable(spm_normalize spm_normalize_main.cc)
 add_executable(spm_train spm_train_main.cc)
 add_executable(spm_export_vocab spm_export_vocab_main.cc)
 
-target_link_libraries(spm_encode sentencepiece)
-target_link_libraries(spm_decode sentencepiece)
-target_link_libraries(spm_normalize sentencepiece sentencepiece_train)
-target_link_libraries(spm_train sentencepiece sentencepiece_train)
-target_link_libraries(spm_export_vocab sentencepiece)
+target_link_libraries(spm_encode PRIVATE sentencepiece)
+target_link_libraries(spm_decode PRIVATE sentencepiece)
+target_link_libraries(spm_normalize PRIVATE sentencepiece sentencepiece_train)
+target_link_libraries(spm_train PRIVATE sentencepiece sentencepiece_train)
+target_link_libraries(spm_export_vocab PRIVATE sentencepiece)
 
 if (SPM_ENABLE_NFKC_COMPILE)
   add_executable(compile_charsmap compile_charsmap_main.cc)
-  target_link_libraries(compile_charsmap sentencepiece sentencepiece_train)
+  target_link_libraries(compile_charsmap PRIVATE sentencepiece sentencepiece_train)
 endif()
 
 list(APPEND SPM_INSTALLTARGETS
@@ -300,6 +351,8 @@ endif()
 
 install(FILES sentencepiece_trainer.h sentencepiece_processor.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/../bindings/c/sentencepiece_c.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 if (NOT SPM_PROTOBUF_PROVIDER STREQUAL "internal")
   install(FILES ${SPM_PROTO_HDRS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
@@ -310,7 +363,7 @@ if (SPM_BUILD_TEST)
   enable_testing()
   add_executable(spm_test test_main.cc ${SPM_TEST_SRCS})
 
-  target_link_libraries(spm_test sentencepiece sentencepiece_train)
+  target_link_libraries(spm_test PRIVATE sentencepiece sentencepiece_train)
 
   set(MEMORYCHECK_COMMAND_OPTIONS "--leak-check=full --show-leak-kinds=definite,possible --error-exitcode=1")
   find_program(CTEST_MEMORYCHECK_COMMAND NAMES valgrind)

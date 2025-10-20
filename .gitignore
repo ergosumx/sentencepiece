@@ -75,3 +75,6 @@ _sentencepiece.*.so
 third_party/abseil-cpp
 
 python/sentencepiece
+build-win-x64/
+
+python
